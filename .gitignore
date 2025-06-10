@@ -1,0 +1,147 @@
+# =============================================================================
+# TERRAFORM
+# =============================================================================
+
+# Local .terraform directories
+**/.terraform/*
+
+# Terraform lockfile
+.terraform.lock.hcl
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude all .tfvars files, which are likely to contain sensitive data
+# But keep example files
+*.tfvars
+!*example.tfvars
+!*template.tfvars
+
+# Ignore override files as they are usually used to override resources locally
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Include override files you wish to add to version control using negated pattern
+# !example_override.tf
+
+# Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
+*.tfplan
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
+
+# =============================================================================
+# PACKER
+# =============================================================================
+
+# Cache objects
+packer_cache/
+
+# Crash log files
+crash.log
+
+# For built boxes
+*.box
+
+# Packer build artifacts
+packer-manifest.json
+manifest.json
+
+# AMI ID files
+ami_id.txt
+**/ami_id.txt
+
+# Packer variables files (may contain sensitive data)
+*.pkrvars.hcl
+!*example.pkrvars.hcl
+!*template.pkrvars.hcl
+
+# =============================================================================
+# AWS
+# =============================================================================
+
+# AWS credentials
+.aws/
+aws-credentials.txt
+
+# =============================================================================
+# GENERAL
+# =============================================================================
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# SSL certificates (if any)
+*.pem
+*.key
+*.crt
+*.csr
+
+# Backup files
+*.backup
+*.bak
+
+# Archives
+*.tar
+*.zip
+*.gz
+*.rar
+
+# =============================================================================
+# PROJECT SPECIFIC
+# =============================================================================
+
+# Generated files from scripts
+*.generated
+build/
+dist/
+
+# Local configuration files
+local.tfvars
+dev-local.tfvars
+personal.tfvars
+
+# Sensitive files that might be accidentally created
+*secret*
+*password*
+*credential*
+*private*
+
+# Documentation builds
+docs/_build/ 

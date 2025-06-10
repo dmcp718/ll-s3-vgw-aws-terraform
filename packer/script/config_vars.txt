@@ -1,0 +1,8 @@
+FILESPACE1="wrkspc-proj-01.dpfs"
+FSUSER1="root"
+LLPASSWD1="Nab2025!"
+ROOTPOINT1="/"
+ROOT_ACCESS_KEY="s3-admin"
+ROOT_SECRET_KEY="Nab2025!"
+VGW_REGION="us-west-2"
+FQDOMAIN="solution-lab.click"
