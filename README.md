@@ -1,6 +1,7 @@
 # S3 Gateway Infrastructure
 
-A generic, environment-configurable AWS infrastructure for deploying S3 Gateway services using Terraform and Packer.
+A generic, environment-configurable AWS infrastructure for deploying versitygw S3 Gateway services using Terraform and Packer.
+https://github.com/versity/versitygw
 
 ## Overview
 
