@@ -15,7 +15,7 @@ data "aws_availability_zones" "this" {
 
 module "vpc" {
   source = "terraform-aws-modules/vpc/aws"
-  
+
   name = "${local.name_prefix}-vpc-${random_id.this.hex}"
   cidr = var.vpc_cidr
   azs  = local.azs
@@ -42,8 +42,10 @@ module "vpc_endpoints" {
 
   endpoints = {
     s3 = {
-      service = "s3"
-      tags    = merge(local.common_tags, { Name = "${local.name_prefix}-s3-vpc-endpoint" })
+      service             = "s3"
+      service_type        = "Gateway"
+      route_table_ids     = concat([module.vpc.private_route_table_ids[0]], module.vpc.public_route_table_ids)
+      tags                = merge(local.common_tags, { Name = "${local.name_prefix}-s3-vpc-endpoint" })
     },
     ssm = {
       service = "ssm"
@@ -56,7 +58,7 @@ module "vpc_endpoints" {
     ec2messages = {
       service = "ec2messages"
       tags    = merge(local.common_tags, { Name = "${local.name_prefix}-ec2messages" })
-    }
+    },
   }
 
   tags = local.common_tags

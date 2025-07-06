@@ -19,105 +19,136 @@ else
     sudo apt-get install -y awscli mdadm
 fi
 
-# Setup NVMe instance storage for high-throughput caching
-# Find actual NVMe instance storage devices (exclude root and EBS volumes)
-ROOT_DEVICE=$(lsblk -n -o NAME,MOUNTPOINT | grep "/$" | awk '{print $1}' | sed 's/[0-9]*$//' | sed 's/p$//')
-NVME_DEVICES=$(lsblk -d -n -o NAME,TYPE | grep disk | grep nvme | grep -v "^${ROOT_DEVICE}" | awk '{print "/dev/"$1}')
+# Setup NVMe instance storage for high-performance data and caching
+# c6id.2xlarge has one instance storage device (nvme1n1)
+# Use lsblk raw output to avoid tree characters
+ROOT_PARTITION=$(lsblk -r -n -o NAME,MOUNTPOINT | grep "/$" | awk '{print $1}')
+ROOT_DEVICE=$(echo "$ROOT_PARTITION" | sed 's/[0-9]*$//' | sed 's/p$//')
+echo "Root partition: $ROOT_PARTITION"
+echo "Root device: $ROOT_DEVICE"
 
-# Filter out EBS volumes (they typically have vendor "Amazon" or appear as attached volumes)
-INSTANCE_STORAGE_DEVICES=""
-for device in $NVME_DEVICES; do
-    # Check if it's instance storage (not EBS) by checking if it's listed in /proc/partitions
-    # Instance storage typically shows up as larger devices and doesn't have the EBS characteristics
-    VENDOR=$(cat /sys/block/$(basename $device)/device/vendor 2>/dev/null | tr -d ' ')
-    if [[ "$VENDOR" != "Amazon" ]] && [[ "$VENDOR" != "AmazonEC2" ]]; then
-        INSTANCE_STORAGE_DEVICES="$INSTANCE_STORAGE_DEVICES $device"
+# For c6id.2xlarge, instance storage is typically nvme1n1
+INSTANCE_STORAGE_DEVICE="/dev/nvme1n1"
+echo "Checking for instance storage device: $INSTANCE_STORAGE_DEVICE"
+
+if [ -b "$INSTANCE_STORAGE_DEVICE" ]; then
+    device_name=$(basename $INSTANCE_STORAGE_DEVICE)
+    echo "Found device: $INSTANCE_STORAGE_DEVICE"
+    
+    # Check if this is not the root device
+    if [[ "$device_name" != "$ROOT_DEVICE" ]] && ! lsblk "$INSTANCE_STORAGE_DEVICE" | grep -q "/"; then
+        echo "  -> Verified as instance storage (not root device)"
+        INSTANCE_STORAGE_DEVICES="$INSTANCE_STORAGE_DEVICE"
+    else
+        echo "  -> Device is root device or already mounted, skipping"
+        INSTANCE_STORAGE_DEVICES=""
     fi
-done
+else
+    echo "Instance storage device $INSTANCE_STORAGE_DEVICE not found"
+    INSTANCE_STORAGE_DEVICES=""
+fi
+
+# Check if /data is already mounted from EBS and unmount it
+if mountpoint -q /data; then
+    echo "Unmounting existing /data mount to use instance storage instead"
+    sudo umount /data || true
+    # Remove any existing /data entries from fstab
+    sudo sed -i '/\/data/d' /etc/fstab
+fi
+
+echo "Instance storage devices found: '$INSTANCE_STORAGE_DEVICES'"
 
 if [ -n "$INSTANCE_STORAGE_DEVICES" ]; then
-    echo "Found NVMe instance storage devices: $INSTANCE_STORAGE_DEVICES"
+    echo "Found instance storage device: $INSTANCE_STORAGE_DEVICES"
     
-    # Create RAID 0 array with NVMe devices for maximum throughput
-    NVME_COUNT=$(echo $INSTANCE_STORAGE_DEVICES | wc -w)
-    if [ $NVME_COUNT -gt 1 ]; then
-        echo "Creating RAID 0 array with $NVME_COUNT NVMe devices"
-        sudo mdadm --create --verbose /dev/md0 --level=0 --raid-devices=$NVME_COUNT $INSTANCE_STORAGE_DEVICES
-        sudo mkfs.xfs -f /dev/md0
-        sudo mkdir -p /mnt/nvme-cache
-        sudo mount /dev/md0 /mnt/nvme-cache
-        echo '/dev/md0 /mnt/nvme-cache xfs defaults,noatime 0 0' | sudo tee -a /etc/fstab
-    else
-        echo "Setting up single NVMe device"
-        SINGLE_NVME=$(echo $INSTANCE_STORAGE_DEVICES | awk '{print $1}')
-        sudo mkfs.xfs -f $SINGLE_NVME
-        sudo mkdir -p /mnt/nvme-cache
-        sudo mount $SINGLE_NVME /mnt/nvme-cache
-        echo "$SINGLE_NVME /mnt/nvme-cache xfs defaults,noatime 0 0" | sudo tee -a /etc/fstab
-    fi
+    # Format and mount single NVMe instance storage device
+    echo "Setting up single NVMe device for high-performance data storage"
+    sudo mkfs.xfs -f $INSTANCE_STORAGE_DEVICES -d su=256k,sw=1
     
-    # Set proper permissions for cache directory
-    sudo chown -R lucidlink:lucidlink /mnt/nvme-cache
-    sudo chmod 755 /mnt/nvme-cache
+    # Mount as /data for LucidLink
+    sudo mkdir -p /data
+    sudo mount $INSTANCE_STORAGE_DEVICES /data -o defaults,noatime,largeio,swalloc
+    echo "$INSTANCE_STORAGE_DEVICES /data xfs defaults,noatime,largeio,swalloc 0 0" | sudo tee -a /etc/fstab
+    
+    # Set proper permissions
+    sudo chown -R ubuntu:ubuntu /data
+    sudo chmod 755 /data
+    
+    echo "Instance storage mounted at /data with optimized XFS settings"
 else
-    echo "No NVMe instance storage found"
+    echo "No instance storage found, using root volume for /data as fallback"
+    sudo mkdir -p /data
+    sudo chown -R ubuntu:ubuntu /data
 fi
 
-# Setup high-performance EBS data volume
-# Find the EBS data volume (excluding root volume)
-ROOT_DEVICE_FULL=$(df / | tail -1 | awk '{print $1}')
-EBS_DATA_DEVICE=""
-
-# Check common device paths for the additional EBS volume
-for device in /dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1 /dev/xvdb /dev/sdb; do
-    if [ -e "$device" ] && [ "$device" != "$ROOT_DEVICE_FULL" ]; then
-        # Check if it's not already mounted and is a block device
-        if ! mount | grep -q "$device" && [ -b "$device" ]; then
-            EBS_DATA_DEVICE="$device"
-            break
-        fi
-    fi
-done
-
-if [ -n "$EBS_DATA_DEVICE" ]; then
-    echo "Setting up high-performance EBS data volume: $EBS_DATA_DEVICE"
-    sudo mkfs.xfs -f $EBS_DATA_DEVICE
-    sudo mkdir -p /data
-    sudo mount $EBS_DATA_DEVICE /data
-    echo "$EBS_DATA_DEVICE /data xfs defaults,noatime 0 0" | sudo tee -a /etc/fstab
-    sudo chown -R lucidlink:lucidlink /data
-else
-    echo "EBS data volume not found, creating /data directory on root volume"
-    sudo mkdir -p /data
-    sudo chown -R lucidlink:lucidlink /data
-fi
+# Create /media/lucidlink mount point with correct permissions
+sudo mkdir -p /media/lucidlink
+sudo chown -R ubuntu:ubuntu /media/lucidlink
 
 # Enable and start lucidlink service
 echo "Enabling 'systemctl enable lucidlink-1.service'"
 sudo systemctl enable lucidlink-1.service
+sudo systemctl daemon-reload
 wait
 echo "Starting 'systemctl start lucidlink-1.service'"
 sudo systemctl start lucidlink-1.service
 wait
 
+# Get FSVERSION from environment or systemd service
+FSVERSION=$(systemctl show -p Environment lucidlink-1.service | grep -o 'FSVERSION=[0-9]*' | cut -d= -f2)
+FSVERSION=${FSVERSION:-2}  # Default to version 2 if not found
+
+# Determine LucidLink binary path and instance ID based on version
+if [ "$FSVERSION" = "3" ]; then
+    LUCID_BIN="/usr/local/bin/lucid3"
+    INSTANCE_ID="2001"
+else
+    LUCID_BIN="/usr/bin/lucid2"
+    INSTANCE_ID="501"
+fi
+
 # Wait for lucidlink to be linked
-until lucid2 --instance 501 status | grep -qo "Linked"
+until $LUCID_BIN --instance $INSTANCE_ID status | grep -qo "Linked"
 do
     sleep 1
 done
 sleep 1
 
-# Optimize LucidLink cache settings for NVMe storage
-if [ -d "/mnt/nvme-cache" ]; then
-    echo "Configuring LucidLink to use NVMe cache"
-    /usr/bin/lucid2 --instance 501 config --set --DataCache.Size 80G
-    /usr/bin/lucid2 --instance 501 config --set --DataCache.Path /mnt/nvme-cache
-    # Enable high-performance cache settings
-    /usr/bin/lucid2 --instance 501 config --set --DataCache.WriteMode async
-    /usr/bin/lucid2 --instance 501 config --set --DataCache.ReadAhead 32M
+# Wait a bit longer for daemon to be fully ready for config changes
+sleep 5
+
+# Optimize LucidLink cache settings
+echo "Configuring LucidLink cache settings..."
+
+# Calculate cache size based on available space in /data
+if mountpoint -q /data; then
+    # Get available space in /data and use 80% for cache
+    AVAILABLE_KB=$(df /data | tail -1 | awk '{print $4}')
+    CACHE_SIZE_KB=$((AVAILABLE_KB * 80 / 100))
+    CACHE_SIZE_GB=$((CACHE_SIZE_KB / 1024 / 1024))
+    
+    # Ensure minimum 10GB and maximum 400GB
+    if [ $CACHE_SIZE_GB -lt 10 ]; then
+        CACHE_SIZE_GB=10
+    elif [ $CACHE_SIZE_GB -gt 400 ]; then
+        CACHE_SIZE_GB=400
+    fi
+    
+    echo "Setting DataCache.Size to ${CACHE_SIZE_GB}GiB (80% of available /data space)..."
+    if ! $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Size ${CACHE_SIZE_GB}GiB; then
+        echo "Warning: Failed to set DataCache.Size to ${CACHE_SIZE_GB}GiB"
+    fi
 else
-    /usr/bin/lucid2 --instance 501 config --set --DataCache.Size 80G
+    # Fallback to fixed size if /data not mounted
+    echo "Setting DataCache.Size to 25GiB (fallback)..."
+    if ! $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Size 25GiB; then
+        echo "Warning: Failed to set DataCache.Size"
+    fi
 fi
+
+# Verify configuration was applied
+echo "Verifying LucidLink cache configuration..."
+$LUCID_BIN --instance $INSTANCE_ID config --list --local | grep -E "DataCache" || echo "Could not retrieve cache config"
 
 wait
 sleep 1
@@ -125,6 +156,14 @@ sleep 1
 # Enable and start s3-gw service
 echo "Enabling 'systemctl enable s3-gw.service'"
 sudo systemctl enable s3-gw.service
+sudo systemctl daemon-reload
 wait
 echo "Starting 'systemctl start s3-gw.service'"
 sudo systemctl start s3-gw.service
+# Verify service is running
+sleep 5
+if ! systemctl is-active --quiet s3-gw.service; then
+    echo "ERROR: s3-gw service failed to start"
+    systemctl status s3-gw.service
+    journalctl -u s3-gw.service -n 50
+fi

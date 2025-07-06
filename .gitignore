@@ -137,6 +137,9 @@ local.tfvars
 dev-local.tfvars
 personal.tfvars
 
+# Packer configuration with sensitive data
+packer/script/config_vars.txt
+
 # Sensitive files that might be accidentally created
 *secret*
 *password*
@@ -144,4 +147,7 @@ personal.tfvars
 *private*
 
 # Documentation builds
-docs/_build/ 
+docs/_build/
+
+# Claude Code documentation
+CLAUDE.md 

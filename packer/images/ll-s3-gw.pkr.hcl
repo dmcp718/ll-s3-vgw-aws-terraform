@@ -24,6 +24,16 @@ variable "filespace" {
   default = "filespace.domain"
 }
 
+variable "enable_iam" {
+  type    = bool
+  default = false
+}
+
+variable "iam_dir" {
+  type    = string
+  default = "/data/.versitygw"
+}
+
 source "amazon-ebs" "ubuntu-minimal" {
   ami_name      = "ll-s3-gw-${var.filespace}-${local.timestamp}"
   instance_type = var.instance_type
@@ -50,15 +60,6 @@ source "amazon-ebs" "ubuntu-minimal" {
       delete_on_termination   = true
   }
 
-  ami_block_device_mappings {
-      device_name             = "/dev/sdb"
-      volume_size             = 500
-      volume_type             = "gp3"
-      iops                    = 16000
-      throughput              = 1000
-      delete_on_termination   = true
-      encrypted               = true
-  }
 }
 
 build {

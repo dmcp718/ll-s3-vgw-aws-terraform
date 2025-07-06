@@ -2,21 +2,7 @@ locals {
   solution_name = local.name_prefix
 }
 
-# Default AMI lookup for Ubuntu if none specified
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
+# AMI ID must be provided via variable
 
 resource "aws_security_group" "this" {
   name        = "${local.solution_name}-sg-${random_id.this.hex}"
@@ -108,12 +94,13 @@ resource "aws_lb_target_group" "s3" {
 
 resource "aws_launch_template" "this" {
   name_prefix                          = "${local.solution_name}-lt-${random_id.this.hex}"
-  image_id                             = var.ami_id != "" ? var.ami_id : data.aws_ami.ubuntu.id
+  image_id                             = var.ami_id
   instance_type                        = var.instance_type
   key_name                             = var.key_name != "" ? var.key_name : null
-  user_data                            = filebase64("${path.module}/resources/bootstrap.sh")
   vpc_security_group_ids               = [aws_security_group.this.id]
   instance_initiated_shutdown_behavior = "terminate"
+
+  user_data = base64encode(file("${path.module}/resources/bootstrap.sh"))
 
   dynamic "iam_instance_profile" {
     for_each = var.enable_ssm ? [1] : []
@@ -129,24 +116,14 @@ resource "aws_launch_template" "this" {
     device_name = "/dev/sda1"
     ebs {
       volume_size           = var.root_volume_size
-      volume_type          = var.root_volume_type
+      volume_type           = var.root_volume_type
       delete_on_termination = true
-      encrypted            = var.ebs_encrypted
+      encrypted             = var.ebs_encrypted
     }
   }
 
-  # High-performance EBS volume for data storage
-  block_device_mappings {
-    device_name = "/dev/sdb"
-    ebs {
-      volume_size           = var.data_volume_size
-      volume_type          = var.data_volume_type
-      iops                 = var.data_volume_iops
-      throughput           = var.data_volume_throughput
-      delete_on_termination = true
-      encrypted            = var.ebs_encrypted
-    }
-  }
+  # Note: Using instance storage (NVMe) for data storage instead of EBS
+  # Instance storage provides 7x faster random read IOPS and 4x faster sequential reads
 
   # Utilize NVMe instance storage for high-throughput caching
   block_device_mappings {
@@ -192,26 +169,15 @@ resource "aws_autoscaling_group" "this" {
   health_check_type         = "ELB"
   target_group_arns         = [aws_lb_target_group.s3.arn]
 
-  mixed_instances_policy {
-    launch_template {
-      launch_template_specification {
-        launch_template_id = aws_launch_template.this.id
-        version            = "$Latest"
-      }
-      
-      # Dynamic instance type overrides
-      dynamic "override" {
-        for_each = var.instance_types
-        content {
-          instance_type     = override.value.instance_type
-          weighted_capacity = override.value.weighted_capacity
-        }
-      }
-    }
-    instances_distribution {
-      on_demand_base_capacity                  = var.on_demand_base_capacity
-      on_demand_percentage_above_base_capacity = var.on_demand_percentage_above_base
-    }
+  # Ensure NAT Gateway and VPC endpoints are ready before launching instances
+  depends_on = [
+    module.vpc.natgw_ids,
+    module.vpc_endpoints
+  ]
+
+  launch_template {
+    id      = aws_launch_template.this.id
+    version = "$Latest"
   }
 
   tag {
@@ -232,7 +198,7 @@ resource "aws_autoscaling_group" "this" {
 
 resource "aws_iam_instance_profile" "this" {
   count = var.enable_ssm ? 1 : 0
-  
+
   name = "${local.solution_name}-instance-profile-${random_id.this.hex}"
   role = aws_iam_role.this[0].name
 
@@ -243,7 +209,7 @@ resource "aws_iam_instance_profile" "this" {
 
 resource "aws_iam_role" "this" {
   count = var.enable_ssm ? 1 : 0
-  
+
   name = "${local.solution_name}-instance-role-${random_id.this.hex}"
 
   assume_role_policy = jsonencode({
@@ -267,10 +233,10 @@ resource "aws_iam_role" "this" {
 
 resource "aws_iam_role_policy" "this" {
   count = var.enable_ssm ? 1 : 0
-  
+
   name = "${local.solution_name}-instance-policy-${random_id.this.hex}"
   role = aws_iam_role.this[0].id
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -320,6 +286,14 @@ resource "aws_iam_role_policy" "this" {
           "ssm:UpdateInstanceAssociationStatus",
           "ssm:ListInstanceAssociations",
           "ec2messages:GetMessages"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
         ]
         Resource = "*"
       }

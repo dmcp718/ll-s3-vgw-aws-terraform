@@ -1,17 +1,17 @@
 # Create and validate wildcard ACM certificate for the domain name in Route53 hosted zone 
 data "aws_route53_zone" "main" {
   count = var.create_route53_records ? 1 : 0
-  
+
   name         = local.domain_fqdn
   private_zone = false
 }
 
 resource "aws_acm_certificate" "main" {
   count = var.create_route53_records ? 1 : 0
-  
+
   domain_name               = local.domain_name_clean
   validation_method         = var.certificate_validation_method
-  subject_alternative_names = ["*.${local.domain_name_clean}"]
+  subject_alternative_names = ["*.${local.domain_name_clean}", "*.${var.subdomain_name}.${local.domain_name_clean}"]
 
   lifecycle {
     create_before_destroy = true
@@ -29,8 +29,6 @@ resource "aws_route53_record" "main" {
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-    # Skips the domain if it doesn't contain a wildcard
-    if length(regexall("\\*\\..+", dvo.domain_name)) > 0
   } : {}
 
   allow_overwrite = true
@@ -39,34 +37,41 @@ resource "aws_route53_record" "main" {
   ttl             = 60
   type            = each.value.type
   zone_id         = data.aws_route53_zone.main[0].zone_id
-
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-cert-validation"
-  })
 }
 
 resource "aws_route53_record" "s3" {
   count = var.create_route53_records ? 1 : 0
-  
+
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = var.subdomain_name
   type    = "A"
-  
+
   alias {
     name                   = aws_lb.this.dns_name
     zone_id                = aws_lb.this.zone_id
     evaluate_target_health = true
   }
+}
 
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-${var.subdomain_name}-record"
-  })
+# Wildcard DNS record for virtual host addressing (*.s3.domain.com)
+resource "aws_route53_record" "s3_wildcard" {
+  count = var.create_route53_records ? 1 : 0
+
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = "*.${var.subdomain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.this.dns_name
+    zone_id                = aws_lb.this.zone_id
+    evaluate_target_health = true
+  }
 }
 
 # Certificate validation
 resource "aws_acm_certificate_validation" "main" {
   count = var.create_route53_records && var.certificate_validation_method == "DNS" ? 1 : 0
-  
+
   certificate_arn         = aws_acm_certificate.main[0].arn
   validation_record_fqdns = [for record in aws_route53_record.main : record.fqdn]
 

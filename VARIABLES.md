@@ -79,11 +79,13 @@ This document provides a comprehensive reference for all configurable variables 
 |----------|------|---------|-------------|
 | `root_volume_size` | `number` | `40` | Size of root EBS volume in GB |
 | `root_volume_type` | `string` | `"gp3"` | Type of root EBS volume |
-| `data_volume_size` | `number` | `500` | Size of data EBS volume in GB |
-| `data_volume_type` | `string` | `"gp3"` | Type of data EBS volume |
-| `data_volume_iops` | `number` | `16000` | IOPS for data EBS volume |
-| `data_volume_throughput` | `number` | `1000` | Throughput for data EBS volume in MB/s |
 | `ebs_encrypted` | `bool` | `true` | Enable EBS encryption |
+
+**Note**: Data storage now uses instance NVMe storage instead of EBS volumes for superior performance:
+- 7x faster random read IOPS (48.4K vs 7K)
+- 4x faster sequential reads  
+- 7x lower random read latency
+- Excellent random write performance (68.6K IOPS)
 
 ## Load Balancer Configuration
 
@@ -108,7 +110,7 @@ This document provides a comprehensive reference for all configurable variables 
 
 | Variable | Type | Default | Description | Validation |
 |----------|------|---------|-------------|------------|
-| `domain_name` | `string` | `"solution-lab.click."` | Domain name for the service (with trailing dot) |
+| `domain_name` | `string` | `"example.net."` | Domain name for the service (with trailing dot) |
 | `subdomain_name` | `string` | `"s3"` | Subdomain for the service |
 | `create_route53_records` | `bool` | `true` | Whether to create Route53 records |
 | `certificate_validation_method` | `string` | `"DNS"` | Certificate validation method | Must be DNS or EMAIL |
@@ -136,7 +138,6 @@ vpc_cidr                   = "10.10.0.0/16"
 instance_type              = "c5d.large"
 asg_min_size               = 1
 asg_max_size               = 2
-data_volume_size           = 100
 single_nat_gateway         = true
 enable_detailed_monitoring = false
 enable_deletion_protection = false
@@ -156,7 +157,6 @@ instance_type              = "c5d.xlarge"
 asg_min_size               = 1
 asg_max_size               = 4
 asg_desired_capacity       = 2
-data_volume_size           = 250
 single_nat_gateway         = false
 
 additional_tags = {
@@ -176,9 +176,6 @@ asg_min_size                    = 2
 asg_max_size                    = 6
 asg_desired_capacity            = 3
 health_check_grace_period       = 1800
-data_volume_size                = 500
-data_volume_iops                = 16000
-data_volume_throughput          = 1000
 enable_deletion_protection      = true
 allowed_cidr_blocks             = ["10.30.0.0/16"]
 ssh_cidr_blocks                 = ["10.30.0.0/16"]

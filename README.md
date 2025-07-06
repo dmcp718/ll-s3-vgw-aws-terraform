@@ -1,305 +1,280 @@
 # S3 Gateway Infrastructure
 
-A generic, environment-configurable AWS infrastructure for deploying versitygw S3 Gateway services using Terraform and Packer.
-https://github.com/versity/versitygw
+Deploy [VersityGW](https://github.com/versity/versitygw) - an S3-compatible gateway service backed by LucidLink file spaces - on AWS using Terraform and Packer.
 
-## Overview
+## What is this?
 
-This repository provides a complete infrastructure-as-code solution for deploying S3 Gateway services across multiple environments (dev, staging, production) with customizable configurations.
-
-## Features
-
-- **Multi-environment support**: Separate configurations for dev, staging, and production
-- **Configurable infrastructure**: All hardcoded values replaced with variables
-- **Automated deployment**: Single script for all deployment operations
-- **High availability**: Auto Scaling Groups with multiple instance types
-- **Security**: Configurable security groups and IAM roles
-- **Monitoring**: Optional detailed monitoring and SSM integration
-- **DNS management**: Automated Route53 and SSL certificate management
-
-## Architecture
-
-The infrastructure includes:
-- **VPC**: Configurable CIDR with public/private subnets across 3 AZs
-- **Auto Scaling Group**: Mixed instance types with configurable scaling
-- **Network Load Balancer**: SSL termination with health checks
-- **Route53**: DNS records and SSL certificate validation
-- **IAM**: Conditional roles for SSM and monitoring
-- **VPC Endpoints**: Optional S3 and SSM endpoints for private connectivity
+This infrastructure-as-code solution deploys a highly available S3-compatible API gateway that:
+- Provides S3 API compatibility for any storage backend via LucidLink
+- Runs multiple VersityGW instances behind a load balancer
+- Auto-scales based on demand
+- Includes monitoring and security best practices
+- Supports both LucidLink v2 and v3 clients
 
 ## Quick Start
 
 ### Prerequisites
 
-1. **AWS CLI**: Configure with appropriate credentials
-   ```bash
-   aws configure
-   ```
+- AWS CLI configured with appropriate credentials
+- Terraform >= 1.2.0
+- Packer (for building custom AMIs)
 
-2. **Terraform**: Install Terraform >= 1.2.0
-   ```bash
-   # macOS
-   brew install terraform
-   
-   # Linux
-   wget https://releases.hashicorp.com/terraform/1.6.0/terraform_1.6.0_linux_amd64.zip
-   unzip terraform_1.6.0_linux_amd64.zip
-   sudo mv terraform /usr/local/bin/
-   ```
+### ⚠️ Security Notice
 
-3. **Packer** (optional, for AMI building):
-   ```bash
-   # macOS
-   brew install packer
-   
-   # Linux
-   wget https://releases.hashicorp.com/packer/1.9.4/packer_1.9.4_linux_amd64.zip
-   unzip packer_1.9.4_linux_amd64.zip
-   sudo mv packer /usr/local/bin/
-   
-   # Or use package manager (Ubuntu/Debian)
-   curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-   sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-   sudo apt-get update && sudo apt-get install packer
-   ```
+**Important**: The `config_vars.txt` file contains sensitive information (passwords, access keys) and is excluded from version control. Always:
+- Copy from the template: `config_vars_template.txt` → `config_vars.txt`
+- Use strong, unique passwords and access keys
+- Never commit the actual `config_vars.txt` file to git
+- Review the template for all required configuration values
 
-### Basic Deployment
+### Complete Deployment Process
 
-1. **Clone and navigate to the repository**
-   ```bash
-   git clone <repository-url>
-   cd ll-s3-vgw-aws-terraform
-   ```
-
-2. **Deploy to development environment**
-   ```bash
-   ./deploy.sh dev plan    # Review what will be created
-   ./deploy.sh dev apply   # Deploy the infrastructure
-   ```
-
-3. **Deploy to production**
-   ```bash
-   ./deploy.sh prod plan
-   ./deploy.sh prod apply
-   ```
-
-### Advanced Usage
-
-**Build new AMI and deploy:**
 ```bash
-./deploy.sh staging apply --build-ami
+# 1. Clone the repository
+git clone <repository-url>
+cd ll-s3-vgw-aws-terraform
+
+# 2. Configure your environment
+# Copy the template and edit with your actual values:
+cp packer/script/config_vars_template.txt packer/script/config_vars.txt
+# Edit packer/script/config_vars.txt with your actual values:
+# - AWS_REGION: AWS deployment region (e.g. us-east-1)  
+# - EC2_TYPE: EC2 instance type (recommended: c6id.2xlarge for instance storage)
+# - FILESPACE1: Your LucidLink filespace name
+# - FSUSER1: Your LucidLink email address
+# - LLPASSWD1: Your LucidLink password
+# - FSVERSION: LucidLink version - "2" or "3" (default: "3")
+# - ROOT_ACCESS_KEY: S3 admin access key (change from defaults!)
+# - ROOT_SECRET_KEY: S3 admin secret key (change from defaults!)
+# - VGW_VIRTUAL_DOMAIN: Your S3 domain (e.g. s3.yourcompany.com)
+# - FQDOMAIN: Your base domain (e.g. yourcompany.com)
+
+# 3. Build AMI and deploy
+./deploy.sh apply --build-ami
+
+# Or do it step by step:
+# 3a. Prepare AMI build files
+./deploy.sh prepare
+
+# 3b. Plan deployment with new AMI
+./deploy.sh plan --build-ami
+
+# 3c. Deploy infrastructure
+./deploy.sh apply
 ```
 
-**Use specific AMI:**
-```bash
-./deploy.sh prod apply --ami-id=ami-12345678
+**Important**: The `--build-ami` flag automatically handles all preparation steps including configuration validation, file generation, AMI building, and AMI ID extraction.
+
+## Architecture Overview
+
+```
+┌─────────────────┐
+│   Route53 DNS   │
+└────────┬────────┘
+         │
+┌────────▼────────┐
+│ NLB with SSL    │
+└────────┬────────┘
+         │
+┌────────▼────────────────────────┐
+│     Auto Scaling Group          │
+│ ┌──────────┐ ┌──────────┐      │
+│ │Instance 1│ │Instance 2│ ...  │
+│ └──────────┘ └──────────┘      │
+│                                 │
+│ Each instance runs:             │
+│ • LucidLink daemon (mount)      │
+│ • VersityGW                     │
+└─────────────────────────────────┘
+         │
+┌────────▼──────────┐
+│LucidLink filespace│
+└───────────────────┘
 ```
 
-**Auto-approve deployment:**
-```bash
-./deploy.sh dev apply -y
-```
+### Key Components
 
-**Destroy environment:**
+- **VersityGW**: S3-compatible gateway running on port 8000
+- **LucidLink**: Provides the file system mount for storage backend (supports v2 and v3)
+- **Auto Scaling**: Mixed instance types with spot/on-demand support
+- **Load Balancer**: Network Load Balancer with SSL termination
+- **Storage**: NVMe instance storage (RAID 0) for cache + EBS volumes for data
+
+## Common Operations
+
+### Deployment Commands
+
 ```bash
-./deploy.sh dev destroy
+# View available options
+./deploy.sh --help
+
+# Configuration and preparation
+./deploy.sh prepare              # Validate config and generate build files
+
+# Plan changes (preview)
+./deploy.sh plan                 # Plan with existing AMI
+./deploy.sh plan --build-ami     # Build AMI and plan
+
+# Apply changes
+./deploy.sh apply                # Deploy with existing AMI
+./deploy.sh apply --build-ami    # Build AMI and deploy
+
+# Use specific AMI
+./deploy.sh apply --ami-id=ami-12345678
+
+# Destroy infrastructure
+./deploy.sh destroy
 ```
 
 ## Configuration
 
-### Environment Files
+### Essential Variables
 
-Environment-specific configurations are stored in `terraform/environments/`:
+Edit `packer/script/config_vars.txt` with your values:
 
-- `dev.tfvars` - Development environment (cost-optimized)
-- `staging.tfvars` - Staging environment (production-like)
-- `prod.tfvars` - Production environment (high-performance)
+```bash
+# AWS Deployment Configuration
+AWS_REGION="us-east-1"                    # AWS deployment region
+EC2_TYPE="c6id.2xlarge"                   # EC2 instance type for AMI build
 
-### Key Variables
+# LucidLink Configuration
+FILESPACE1="your-lucidlink-filespace"     # LucidLink filespace name
+FSUSER1="your-username"                   # LucidLink username
+LLPASSWD1="your-password"                 # LucidLink password
+ROOTPOINT1="/"                            # Root mount point
+FSVERSION="2"                             # LucidLink version (2 or 3)
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `environment` | Environment name | `dev` |
-| `project_name` | Project identifier | `s3-gateway` |
-| `region` | AWS region | `us-west-2` |
-| `vpc_cidr` | VPC CIDR block | `10.10.10.0/24` |
-| `instance_type` | Primary instance type | `c5d.2xlarge` |
-| `asg_min_size` | Minimum instances | `1` |
-| `asg_max_size` | Maximum instances | `3` |
-| `data_volume_size` | EBS volume size (GB) | `500` |
-| `domain_name` | Domain for DNS | `solution-lab.click.` |
-| `allowed_cidr_blocks` | Access control | `["0.0.0.0/0"]` |
-
-### Security Configuration
-
-**Development Environment:**
-- Restricted CIDR blocks for internal access
-- Smaller instances for cost optimization
-- Single NAT gateway
-- Detailed monitoring disabled
-
-**Production Environment:**
-- VPC-only access for security
-- High-performance instance types
-- Multiple NAT gateways for redundancy
-- Full monitoring enabled
-- Deletion protection enabled
-
-## Customization
-
-### Adding New Environments
-
-1. Create new tfvars file:
-   ```bash
-   cp terraform/environments/dev.tfvars terraform/environments/test.tfvars
-   ```
-
-2. Modify the environment variable:
-   ```hcl
-   environment = "test"
-   ```
-
-3. Update deployment script validation (optional):
-   ```bash
-   # Edit deploy.sh and add "test" to valid environments
-   ```
-
-### Custom Instance Types
-
-Modify the `instance_types` variable in your environment file:
-
-```hcl
-instance_types = [
-  {
-    instance_type     = "c6i.2xlarge"
-    weighted_capacity = "4"
-  },
-  {
-    instance_type     = "c6i.xlarge"
-    weighted_capacity = "2"
-  }
-]
+# S3 Gateway Configuration  
+ROOT_ACCESS_KEY="your-s3-admin-key"       # S3 admin access key
+ROOT_SECRET_KEY="your-s3-admin-secret"    # S3 admin secret key
+VGW_IAM_DIR="/media/lucidlink/.vgw"       # IAM directory path
+FQDOMAIN="your-domain.com"                # Your domain name
 ```
 
-### Network Configuration
+**📖 Full variable reference**: See [`VARIABLES.md`](VARIABLES.md) for all 50+ Terraform variables.
 
-Customize VPC and subnet configuration:
+### Variable Precedence
 
-```hcl
-vpc_cidr           = "10.50.0.0/16"
-enable_nat_gateway = true
-single_nat_gateway = false  # High availability
+Terraform variables can be set via (in order of precedence):
+1. Command line: `./deploy.sh apply --ami-id=ami-123`
+2. Environment variables: `export TF_VAR_instance_type=c5d.large`
+3. Terraform variable files
+
+## Advanced Usage
+
+### Configuration Process
+
+The deployment requires updating configuration files with your specific values:
+
+```bash
+# 1. Edit the main configuration file
+vim packer/script/config_vars.txt
+
+# 2. Validate configuration
+./deploy.sh prepare
+
+# 3. Build AMI manually (optional)
+cd packer/script && ./ll-s3-gw_ami_build_args.sh
+cd ../images && packer build -var-file="variables.auto.pkrvars.hcl" ll-s3-gw.pkr.hcl
 ```
-
-### Storage Configuration
-
-Adjust EBS volumes:
-
-```hcl
-data_volume_size       = 1000
-data_volume_iops       = 20000
-data_volume_throughput = 1000
-data_volume_type       = "gp3"
-```
-
-## AMI Management
 
 ### Building Custom AMIs
 
-The Packer configuration builds Ubuntu-based AMIs with:
-- LucidLink client pre-installed
-- S3 Gateway service configured
-- Optimized storage configuration
+The AMI build process follows these steps:
 
-**Build AMI manually:**
+1. **Configuration Validation**: Checks `config_vars.txt` for required values
+2. **File Generation**: Runs `ll-s3-gw_ami_build_args.sh` to create build files
+3. **Packer Build**: Creates the AMI with all software pre-installed
+4. **AMI ID Extraction**: Automatically extracts AMI ID for Terraform
+
 ```bash
+# Automatic (recommended)
+./deploy.sh apply --build-ami
+
+# Manual process
+./deploy.sh prepare                    # Step 1 & 2
 cd packer/images
-packer build -var-file="variables.auto.pkrvars.hcl" ll-s3-gw.pkr.hcl
+packer build -var-file="variables.auto.pkrvars.hcl" ll-s3-gw.pkr.hcl  # Step 3
+# Step 4 happens automatically via post-processor
 ```
 
-**Environment-specific AMI builds:**
-Create `packer/environments/` directory with environment-specific variables.
+### Monitoring & Access
 
-## Monitoring and Logging
-
-### CloudWatch Integration
-
-When `enable_detailed_monitoring = true`:
-- EC2 detailed monitoring enabled
-- Custom metrics for application performance
-- Log aggregation to CloudWatch Logs
-
-### Systems Manager Integration
-
-When `enable_ssm = true`:
-- Session Manager for secure shell access
-- Systems Manager Agent for patch management
-- VPC endpoints for private connectivity
-
-## Security
-
-### Access Control
-
-- **SSH Access**: Configurable CIDR blocks via `ssh_cidr_blocks`
-- **Application Access**: Controlled via `allowed_cidr_blocks`
-- **IAM Roles**: Least privilege principle with conditional creation
-
-### Encryption
-
-- **EBS Volumes**: Encrypted by default
-- **SSL/TLS**: Configurable SSL policies for load balancer
-- **VPC Endpoints**: Private connectivity for AWS services
+- **CloudWatch**: Enabled with `enable_detailed_monitoring = true`
+- **SSM Session Manager**: Secure shell access with `enable_ssm = true`
+- **Health Checks**: Automatic via ALB on configurable endpoints
 
 ## Troubleshooting
 
 ### Common Issues
 
-**1. Certificate validation timeout:**
+**Configuration not updated**
 ```bash
-# Check Route53 hosted zone configuration
+# The script will warn if template values are detected
+./deploy.sh prepare
+# Update packer/script/config_vars.txt with actual values
+```
+
+**AMI build fails**
+```bash
+# Check if configuration files were generated
+ls -la packer/files/
+# Re-run preparation step
+./deploy.sh prepare
+```
+
+**Certificate validation timeout**
+```bash
+# Verify Route53 hosted zone
 aws route53 list-hosted-zones
 ```
 
-**2. AMI not found:**
+**Instance launch failures**
 ```bash
-# Verify AMI exists in target region
+# Check Auto Scaling Group events
+aws autoscaling describe-scaling-activities \
+  --auto-scaling-group-name <project>-<env>-asg
+```
+
+**AMI not found**
+```bash
+# Verify AMI in target region
 aws ec2 describe-images --image-ids ami-12345678
 ```
 
-**3. Instance launch failures:**
-```bash
-# Check Auto Scaling Group events
-aws autoscaling describe-scaling-activities --auto-scaling-group-name <asg-name>
-```
-
-### Validation Commands
+### Validation
 
 ```bash
-# Validate Terraform configuration
-./deploy.sh dev validate
+# Validate configuration
+./deploy.sh validate
 
 # Check AWS credentials
 aws sts get-caller-identity
-
-# Verify prerequisites
-./deploy.sh --help
 ```
+
+## Security Features
+
+- **Encryption**: EBS volumes encrypted by default
+- **Access Control**: Configurable security groups and CIDR blocks
+- **IAM**: Least-privilege roles with conditional features
+- **SSL/TLS**: Configurable policies on load balancer
+- **Secrets**: Systemd credential encryption for sensitive data
 
 ## Contributing
 
-1. Follow the established variable naming conventions
-2. Update environment files when adding new variables
-3. Test changes in development environment first
-4. Update documentation for new features
-
-## License
-
-[Your License Here]
+1. Test changes before deployment
+2. Follow existing naming conventions
+3. Update relevant documentation
+4. Create pull requests for review
 
 ## Support
 
-For issues and questions:
-- Check the troubleshooting section
-- Review AWS CloudTrail logs
-- Examine Terraform state files
-- Contact the platform team 
+For issues:
+1. Check the troubleshooting section above
+2. Review CloudWatch logs
+3. Open an issue in this repository
+
+---
+
+For detailed configuration options, see [`VARIABLES.md`](VARIABLES.md)  
+For development guidance, see [`CLAUDE.md`](CLAUDE.md)
