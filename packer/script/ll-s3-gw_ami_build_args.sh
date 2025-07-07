@@ -112,6 +112,10 @@ sudo mv /tmp/lucidlink-service-vars1.txt /s3-gw/lucid/lucidlink-service-vars1.tx
 sudo mv /tmp/lucidlink-1.service /etc/systemd/system/lucidlink-1.service
 sudo mv /tmp/s3-gw.service /etc/systemd/system/s3-gw.service
 
+# Create drop-in directory and install mount check configuration
+sudo mkdir -p /etc/systemd/system/lucidlink-1.service.d
+sudo mv /tmp/lucidlink-1-mount-check.conf /etc/systemd/system/lucidlink-1.service.d/mount-check.conf
+
 # Encrypt LucidLink passwords and shred the original base64 plaintext files
 LLPASSWORD1=\$(cat /tmp/lucidlink-password1.txt | base64 --decode)
 echo -n "\${LLPASSWORD1}" | systemd-creds encrypt --name=ll-password-1 - /s3-gw/lucid/ll-password-1.cred &
@@ -125,15 +129,29 @@ sudo chmod 700 -R /s3-gw/lucid
 sudo chmod 400 /s3-gw/lucid/ll-password-1.cred
 sudo sed -i -e 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
 
+# Network performance optimizations
+echo 'net.core.rmem_max = 134217728' | sudo tee -a /etc/sysctl.conf
+echo 'net.core.wmem_max = 134217728' | sudo tee -a /etc/sysctl.conf
+echo 'net.ipv4.tcp_rmem = 4096 87380 134217728' | sudo tee -a /etc/sysctl.conf
+echo 'net.ipv4.tcp_wmem = 4096 65536 134217728' | sudo tee -a /etc/sysctl.conf
+echo 'net.core.netdev_max_backlog = 5000' | sudo tee -a /etc/sysctl.conf
+echo 'net.ipv4.tcp_window_scaling = 1' | sudo tee -a /etc/sysctl.conf
+echo 'net.ipv4.tcp_congestion_control = bbr' | sudo tee -a /etc/sysctl.conf
+echo 'net.core.default_qdisc = fq' | sudo tee -a /etc/sysctl.conf
+
+# Apply network optimizations
+sudo sysctl -p
+
 # Create IAM directory for versitygw
 sudo mkdir -p ${VGW_IAM_DIR}
 sudo chown -R ubuntu:ubuntu ${VGW_IAM_DIR}
 sudo chmod 755 ${VGW_IAM_DIR}
 
-# Enable systemd services
+# DO NOT enable systemd services during AMI build - bootstrap.sh will enable them
+# This prevents services from starting before instance configuration is complete
 sudo systemctl daemon-reload
-sudo systemctl enable lucidlink-1.service
-sudo systemctl enable s3-gw.service
+# sudo systemctl enable lucidlink-1.service
+# sudo systemctl enable s3-gw.service
 
 # Install Docker
 sudo apt-get -y install aptitude apt-utils apt-transport-https ca-certificates software-properties-common ca-certificates lsb-release jq nano
@@ -200,15 +218,34 @@ cat >../files/s3-gw.service <<EOF
 [Unit]
 Description=s3-gw.service
 Requires=docker.service lucidlink-1.service
-After=docker.service lucidlink-1.service
+After=docker.service lucidlink-1.service cloud-final.service
+StartLimitBurst=5
+StartLimitIntervalSec=600
 [Service]
-TimeoutStartSec=120
+TimeoutStartSec=300
 Restart=always
+RestartSec=30
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/s3-gw
 Type=simple
-ExecStartPre=/bin/bash -c "echo 'Waiting for LucidLink filespace to be fully synchronized...'; timeout 60 bash -c 'while [ \$(ls -1 /media/lucidlink | wc -l) -lt 3 ]; do echo \"LucidLink sync in progress... found \$(ls -1 /media/lucidlink | wc -l) items\"; sleep 5; done'; echo 'LucidLink filespace ready with \$(ls -1 /media/lucidlink | wc -l) items'"
+# Wait for LucidLink to be ready with proper error handling
+ExecStartPre=/bin/bash -c 'echo "Waiting for LucidLink filespace to be fully synchronized..."; \
+  COUNTER=0; \
+  while ! mountpoint -q /media/lucidlink || [ \$(ls -1 /media/lucidlink 2>/dev/null | wc -l) -lt 3 ]; do \
+    if ! mountpoint -q /media/lucidlink; then \
+      echo "LucidLink mount point not ready yet..."; \
+    else \
+      echo "LucidLink sync in progress... found \$(ls -1 /media/lucidlink 2>/dev/null | wc -l) items"; \
+    fi; \
+    sleep 5; \
+    COUNTER=\$((COUNTER + 1)); \
+    if [ \$COUNTER -gt 24 ]; then \
+      echo "ERROR: LucidLink sync timeout after 2 minutes"; \
+      exit 1; \
+    fi; \
+  done; \
+  echo "LucidLink filespace ready with \$(ls -1 /media/lucidlink | wc -l) items"'
 ExecStart=/bin/bash -c "docker compose -f /s3-gw/compose.yaml up"
 ExecStop=/bin/bash -c "docker compose -f /s3-gw/compose.yaml down"
 
@@ -228,7 +265,12 @@ services:
       - versitygw-3
     ports:
       - "8000:8000"
-    command: [ "--insecure", "--health-path", "/health", "--address", ":8000", "http://versitygw-{1...3}:9000" ]
+    command: [ "--insecure", "--health-path", "/health", "--address", ":8000", "http://versitygw-1:9000", "http://versitygw-2:9000", "http://versitygw-3:9000" ]
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 6G
   versitygw-1:
     image: versity/versitygw:latest
     restart: always
@@ -246,9 +288,10 @@ services:
       VGW_REGION: "${VGW_REGION}"
       VGW_IAM_DIR: "${VGW_IAM_DIR:-/media/lucidlink/.vgw}"
       VGW_VIRTUAL_DOMAIN: "${VGW_VIRTUAL_DOMAIN:-}"
-      # Performance optimizations
-      GOMEMLIMIT: "4GiB"
-      GOGC: "100"
+      # Performance optimizations for c6id.4xlarge
+      GOMEMLIMIT: "8GiB"
+      GOGC: "50"
+      GOMAXPROCS: "4"
     volumes:
       - /media/lucidlink:/data
       - ${VGW_IAM_DIR:-/media/lucidlink/.vgw}:${VGW_IAM_DIR:-/media/lucidlink/.vgw}
@@ -257,6 +300,11 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
   versitygw-2:
     image: versity/versitygw:latest
     restart: always
@@ -274,9 +322,10 @@ services:
       VGW_REGION: "${VGW_REGION}"
       VGW_IAM_DIR: "${VGW_IAM_DIR:-/media/lucidlink/.vgw}"
       VGW_VIRTUAL_DOMAIN: "${VGW_VIRTUAL_DOMAIN:-}"
-      # Performance optimizations
-      GOMEMLIMIT: "4GiB"
-      GOGC: "100"
+      # Performance optimizations for c6id.4xlarge
+      GOMEMLIMIT: "8GiB"
+      GOGC: "50"
+      GOMAXPROCS: "4"
     volumes:
       - /media/lucidlink:/data
       - ${VGW_IAM_DIR:-/media/lucidlink/.vgw}:${VGW_IAM_DIR:-/media/lucidlink/.vgw}
@@ -285,6 +334,11 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
   versitygw-3:
     image: versity/versitygw:latest
     restart: always
@@ -302,9 +356,10 @@ services:
       VGW_REGION: "${VGW_REGION}"
       VGW_IAM_DIR: "${VGW_IAM_DIR:-/media/lucidlink/.vgw}"
       VGW_VIRTUAL_DOMAIN: "${VGW_VIRTUAL_DOMAIN:-}"
-      # Performance optimizations
-      GOMEMLIMIT: "4GiB"
-      GOGC: "100"
+      # Performance optimizations for c6id.4xlarge
+      GOMEMLIMIT: "8GiB"
+      GOGC: "50"
+      GOMAXPROCS: "4"
     volumes:
       - /media/lucidlink:/data
       - ${VGW_IAM_DIR:-/media/lucidlink/.vgw}:${VGW_IAM_DIR:-/media/lucidlink/.vgw}
@@ -313,6 +368,11 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
 EOF
 
 echo "EC2 instance build script created: $USRDATAF"

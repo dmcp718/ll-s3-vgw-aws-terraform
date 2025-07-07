@@ -159,6 +159,16 @@ resource "aws_launch_template" "this" {
   })
 }
 
+# Placement group for enhanced networking performance
+resource "aws_placement_group" "this" {
+  name     = "${local.solution_name}-pg-${random_id.this.hex}"
+  strategy = "cluster"
+  
+  tags = merge(local.common_tags, {
+    Name = "${local.solution_name}-placement-group"
+  })
+}
+
 resource "aws_autoscaling_group" "this" {
   name_prefix               = "${local.solution_name}-asg-"
   min_size                  = var.asg_min_size
@@ -168,6 +178,7 @@ resource "aws_autoscaling_group" "this" {
   health_check_grace_period = var.health_check_grace_period
   health_check_type         = "ELB"
   target_group_arns         = [aws_lb_target_group.s3.arn]
+  placement_group           = aws_placement_group.this.id
 
   # Ensure NAT Gateway and VPC endpoints are ready before launching instances
   depends_on = [

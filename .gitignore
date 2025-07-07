@@ -132,6 +132,10 @@ logs/
 build/
 dist/
 
+# Utility scripts
+cleanup-packer-instances.sh
+fix_lucidlink_config.sh
+
 # Local configuration files
 local.tfvars
 dev-local.tfvars
@@ -139,6 +143,9 @@ personal.tfvars
 
 # Packer configuration with sensitive data
 packer/script/config_vars.txt
+
+# Generated Packer files (created by ll-s3-gw_ami_build_args.sh)
+packer/files/
 
 # Sensitive files that might be accidentally created
 *secret*

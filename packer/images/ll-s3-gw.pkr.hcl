@@ -40,6 +40,12 @@ source "amazon-ebs" "ubuntu-minimal" {
   region        = var.region
   ssh_username  = "ubuntu"
   ebs_optimized = true
+  
+  # Ensure proper cleanup of build instances
+  shutdown_behavior                = "terminate"
+  disable_stop_instance           = true
+  force_deregister                = true
+  force_delete_snapshot          = true
 
   source_ami_filter {
     filters = {
@@ -75,7 +81,8 @@ build {
       "../files/lucidlink-password1.txt",
       "../files/.env",
       "../files/s3-gw.service",
-      "../files/compose.yaml"
+      "../files/compose.yaml",
+      "../files/lucidlink-1-mount-check.conf"
     ]
     destination = "/tmp/"
   }
@@ -87,6 +94,7 @@ build {
   provisioner "shell" {
     script          = "../files/build_script.sh"
     execute_command = "sudo /bin/bash -c '{{ .Vars }} {{ .Path }}'"
+    timeout         = "20m"
   }
 
   provisioner "shell" {

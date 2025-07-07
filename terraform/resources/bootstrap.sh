@@ -94,6 +94,13 @@ echo "Starting 'systemctl start lucidlink-1.service'"
 sudo systemctl start lucidlink-1.service
 wait
 
+# Wait for the service to fully start (including ExecStartPost checks)
+echo "Waiting for lucidlink-1.service to be fully active..."
+until systemctl is-active --quiet lucidlink-1.service; do
+    echo "Waiting for lucidlink-1.service to become active..."
+    sleep 2
+done
+
 # Get FSVERSION from environment or systemd service
 FSVERSION=$(systemctl show -p Environment lucidlink-1.service | grep -o 'FSVERSION=[0-9]*' | cut -d= -f2)
 FSVERSION=${FSVERSION:-2}  # Default to version 2 if not found
@@ -158,12 +165,40 @@ echo "Enabling 'systemctl enable s3-gw.service'"
 sudo systemctl enable s3-gw.service
 sudo systemctl daemon-reload
 wait
+
+# Wait for LucidLink to have some data before starting s3-gw
+echo "Waiting for LucidLink filespace to begin synchronization before starting s3-gw..."
+SYNC_COUNTER=0
+while [ $(ls -1 /media/lucidlink 2>/dev/null | wc -l) -eq 0 ]; do
+    echo "Waiting for LucidLink mount to appear..."
+    sleep 5
+    SYNC_COUNTER=$((SYNC_COUNTER + 1))
+    if [ $SYNC_COUNTER -gt 12 ]; then
+        echo "WARNING: LucidLink mount not appearing after 60 seconds"
+        break
+    fi
+done
+
 echo "Starting 'systemctl start s3-gw.service'"
 sudo systemctl start s3-gw.service
-# Verify service is running
-sleep 5
-if ! systemctl is-active --quiet s3-gw.service; then
-    echo "ERROR: s3-gw service failed to start"
-    systemctl status s3-gw.service
-    journalctl -u s3-gw.service -n 50
+
+# Wait for the service to fully start
+echo "Waiting for s3-gw.service to be fully active..."
+RETRY_COUNT=0
+until systemctl is-active --quiet s3-gw.service; do
+    echo "Waiting for s3-gw.service to become active (attempt $((RETRY_COUNT + 1)))..."
+    sleep 5
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -gt 12 ]; then
+        echo "ERROR: s3-gw service failed to start after 60 seconds"
+        systemctl status s3-gw.service
+        journalctl -u s3-gw.service -n 50
+        break
+    fi
+done
+
+if systemctl is-active --quiet s3-gw.service; then
+    echo "SUCCESS: s3-gw.service is active and running"
+else
+    echo "WARNING: s3-gw.service may not be fully functional"
 fi

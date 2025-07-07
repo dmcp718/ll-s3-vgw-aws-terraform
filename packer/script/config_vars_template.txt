@@ -4,8 +4,8 @@ AWS_REGION="us-east-1"
 export AWS_DEFAULT_REGION="us-east-1"
 
 # EC2 instance type for S3 Gateway (must have instance storage)
-# Recommended: c6id.2xlarge (8 vCPU, 16GB RAM, 441GB NVMe)
-EC2_TYPE="c6id.2xlarge"
+# Recommended: c6id.4xlarge (16 vCPU, 32GB RAM, 883GB NVMe, Up to 25 Gbps)
+EC2_TYPE="c6id.4xlarge"
 
 # Auto Scaling Group configuration
 ASG_MIN_SIZE="1"
@@ -33,7 +33,7 @@ FSVERSION="3"
 ROOT_ACCESS_KEY="<YOUR_S3_ACCESS_KEY>"
 ROOT_SECRET_KEY="<YOUR_S3_SECRET_KEY>"
 
-# Directory for VersityGW IAM data (do not change unless needed)
+# Directory for VersityGW IAM data
 VGW_IAM_DIR="/media/lucidlink/.vgw"
 
 # Your domain for S3 virtual-hosted-style requests (e.g., "s3.yourcompany.com")

@@ -35,9 +35,10 @@ git clone <repository-url>
 cd ll-s3-vgw-aws-terraform
 
 # 2. Configure your environment
-# Copy the template and edit with your actual values:
+# First, make a copy of the template file:
 cp packer/script/config_vars_template.txt packer/script/config_vars.txt
-# Edit packer/script/config_vars.txt with your actual values:
+
+# Then edit packer/script/config_vars.txt with your actual values:
 # - AWS_REGION: AWS deployment region (e.g. us-east-1)  
 # - EC2_TYPE: EC2 instance type (recommended: c6id.2xlarge for instance storage)
 # - FILESPACE1: Your LucidLink filespace name
@@ -78,9 +79,9 @@ cp packer/script/config_vars_template.txt packer/script/config_vars.txt
          │
 ┌────────▼────────────────────────┐
 │     Auto Scaling Group          │
-│ ┌──────────┐ ┌──────────┐      │
-│ │Instance 1│ │Instance 2│ ...  │
-│ └──────────┘ └──────────┘      │
+│ ┌──────────┐ ┌──────────┐       │
+│ │Instance 1│ │Instance 2│  ...  │
+│ └──────────┘ └──────────┘       │
 │                                 │
 │ Each instance runs:             │
 │ • LucidLink daemon (mount)      │
