@@ -163,7 +163,7 @@ resource "aws_launch_template" "this" {
 resource "aws_placement_group" "this" {
   name     = "${local.solution_name}-pg-${random_id.this.hex}"
   strategy = "cluster"
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.solution_name}-placement-group"
   })
