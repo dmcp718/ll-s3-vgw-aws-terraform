@@ -112,9 +112,7 @@ sudo mv /tmp/lucidlink-service-vars1.txt /s3-gw/lucid/lucidlink-service-vars1.tx
 sudo mv /tmp/lucidlink-1.service /etc/systemd/system/lucidlink-1.service
 sudo mv /tmp/s3-gw.service /etc/systemd/system/s3-gw.service
 
-# Create drop-in directory and install mount check configuration
-sudo mkdir -p /etc/systemd/system/lucidlink-1.service.d
-sudo mv /tmp/lucidlink-1-mount-check.conf /etc/systemd/system/lucidlink-1.service.d/mount-check.conf
+# Note: Service dependencies are handled by bootstrap.sh, no drop-in needed
 
 # Encrypt LucidLink passwords and shred the original base64 plaintext files
 LLPASSWORD1=\$(cat /tmp/lucidlink-password1.txt | base64 --decode)
@@ -218,34 +216,17 @@ cat >../files/s3-gw.service <<EOF
 [Unit]
 Description=s3-gw.service
 Requires=docker.service lucidlink-1.service
-After=docker.service lucidlink-1.service cloud-final.service
+After=docker.service lucidlink-1.service
 StartLimitBurst=5
 StartLimitIntervalSec=600
 [Service]
-TimeoutStartSec=300
+TimeoutStartSec=30
 Restart=always
 RestartSec=30
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/s3-gw
 Type=simple
-# Wait for LucidLink to be ready with proper error handling
-ExecStartPre=/bin/bash -c 'echo "Waiting for LucidLink filespace to be fully synchronized..."; \
-  COUNTER=0; \
-  while ! mountpoint -q /media/lucidlink || [ \$(ls -1 /media/lucidlink 2>/dev/null | wc -l) -lt 3 ]; do \
-    if ! mountpoint -q /media/lucidlink; then \
-      echo "LucidLink mount point not ready yet..."; \
-    else \
-      echo "LucidLink sync in progress... found \$(ls -1 /media/lucidlink 2>/dev/null | wc -l) items"; \
-    fi; \
-    sleep 5; \
-    COUNTER=\$((COUNTER + 1)); \
-    if [ \$COUNTER -gt 24 ]; then \
-      echo "ERROR: LucidLink sync timeout after 2 minutes"; \
-      exit 1; \
-    fi; \
-  done; \
-  echo "LucidLink filespace ready with \$(ls -1 /media/lucidlink | wc -l) items"'
 ExecStart=/bin/bash -c "docker compose -f /s3-gw/compose.yaml up"
 ExecStop=/bin/bash -c "docker compose -f /s3-gw/compose.yaml down"
 

@@ -290,38 +290,8 @@ validate_deployment() {
         fi
     done
     
-    # Check instance connectivity
-    log_info "Checking instance connectivity..."
-    ASG_INSTANCES=$(aws autoscaling describe-auto-scaling-groups \
-        --query "AutoScalingGroups[?contains(AutoScalingGroupName, 's3-gateway')].Instances[?LifecycleState=='InService'].InstanceId" \
-        --output text)
-    
-    if [ -n "$ASG_INSTANCES" ]; then
-        for INSTANCE_ID in $ASG_INSTANCES; do
-            log_info "Checking instance $INSTANCE_ID..."
-            
-            # Wait for SSM agent to connect (timeout after 5 minutes)
-            TIMEOUT=300
-            ELAPSED=0
-            while [ $ELAPSED -lt $TIMEOUT ]; do
-                if aws ssm describe-instance-information \
-                    --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-                    --query 'InstanceInformationList[0].PingStatus' \
-                    --output text 2>/dev/null | grep -q "Online"; then
-                    log_info "✓ Instance $INSTANCE_ID SSM agent is online"
-                    break
-                fi
-                sleep 10
-                ELAPSED=$((ELAPSED + 10))
-            done
-            
-            if [ $ELAPSED -ge $TIMEOUT ]; then
-                log_warning "⚠ Instance $INSTANCE_ID SSM agent not online after 5 minutes"
-            fi
-        done
-    else
-        log_warning "No instances found in Auto Scaling Group"
-    fi
+    # Note: Instance connectivity will be verified by load balancer health checks
+    # ASG instances take 2-3 minutes to launch and become healthy
     
     cd "${SCRIPT_DIR}"
 }

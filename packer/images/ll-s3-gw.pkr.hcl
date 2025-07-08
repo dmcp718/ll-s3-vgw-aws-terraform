@@ -35,7 +35,7 @@ variable "iam_dir" {
 }
 
 source "amazon-ebs" "ubuntu-minimal" {
-  ami_name      = "ll-s3-gw-${var.filespace}-${local.timestamp}"
+  ami_name      = "ll-s3-gw-${regex_replace(var.filespace, "[^a-zA-Z0-9\\-_\\(\\)\\[\\] \\./\\@']", "-")}-${local.timestamp}"
   instance_type = var.instance_type
   region        = var.region
   ssh_username  = "ubuntu"
@@ -43,7 +43,6 @@ source "amazon-ebs" "ubuntu-minimal" {
   
   # Ensure proper cleanup of build instances
   shutdown_behavior                = "terminate"
-  disable_stop_instance           = true
   force_deregister                = true
   force_delete_snapshot          = true
 
@@ -81,8 +80,7 @@ build {
       "../files/lucidlink-password1.txt",
       "../files/.env",
       "../files/s3-gw.service",
-      "../files/compose.yaml",
-      "../files/lucidlink-1-mount-check.conf"
+      "../files/compose.yaml"
     ]
     destination = "/tmp/"
   }
