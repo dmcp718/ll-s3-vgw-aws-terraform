@@ -27,26 +27,38 @@ ROOT_DEVICE=$(echo "$ROOT_PARTITION" | sed 's/[0-9]*$//' | sed 's/p$//')
 echo "Root partition: $ROOT_PARTITION"
 echo "Root device: $ROOT_DEVICE"
 
-# For c6id.2xlarge, instance storage is typically nvme1n1
-INSTANCE_STORAGE_DEVICE="/dev/nvme1n1"
-echo "Checking for instance storage device: $INSTANCE_STORAGE_DEVICE"
+# Dynamically find instance storage devices (NVMe devices that are not root and not mounted)
+echo "Scanning for available instance storage devices..."
+INSTANCE_STORAGE_DEVICES=""
 
-if [ -b "$INSTANCE_STORAGE_DEVICE" ]; then
-    device_name=$(basename $INSTANCE_STORAGE_DEVICE)
-    echo "Found device: $INSTANCE_STORAGE_DEVICE"
-    
-    # Check if this is not the root device
-    if [[ "$device_name" != "$ROOT_DEVICE" ]] && ! lsblk "$INSTANCE_STORAGE_DEVICE" | grep -q "/"; then
-        echo "  -> Verified as instance storage (not root device)"
-        INSTANCE_STORAGE_DEVICES="$INSTANCE_STORAGE_DEVICE"
-    else
-        echo "  -> Device is root device or already mounted, skipping"
-        INSTANCE_STORAGE_DEVICES=""
+for device in /dev/nvme*n1; do
+    if [ -b "$device" ]; then
+        device_name=$(basename $device)
+        echo "Checking device: $device"
+        
+        # Skip if this is the root device
+        if [[ "$device_name" == "$ROOT_DEVICE" ]]; then
+            echo "  -> Skipping $device (root device)"
+            continue
+        fi
+        
+        # Skip if device has partitions or is mounted
+        if lsblk "$device" | grep -q "/"; then
+            echo "  -> Skipping $device (has mounted partitions)"
+            continue
+        fi
+        
+        # Skip if device has partitions at all
+        if lsblk -n "$device" | grep -q "part"; then
+            echo "  -> Skipping $device (has partitions)"
+            continue
+        fi
+        
+        echo "  -> Found instance storage: $device"
+        INSTANCE_STORAGE_DEVICES="$device"
+        break
     fi
-else
-    echo "Instance storage device $INSTANCE_STORAGE_DEVICE not found"
-    INSTANCE_STORAGE_DEVICES=""
-fi
+done
 
 # Check if /data is already mounted from EBS and unmount it
 if mountpoint -q /data; then
@@ -101,9 +113,12 @@ until systemctl is-active --quiet lucidlink-1.service; do
     sleep 2
 done
 
-# Get FSVERSION from environment or systemd service
-FSVERSION=$(systemctl show -p Environment lucidlink-1.service | grep -o 'FSVERSION=[0-9]*' | cut -d= -f2)
+# Get FSVERSION from environment file
+if [ -f "/s3-gw/lucid/lucidlink-service-vars1.txt" ]; then
+    . /s3-gw/lucid/lucidlink-service-vars1.txt
+fi
 FSVERSION=${FSVERSION:-2}  # Default to version 2 if not found
+echo "Using FSVERSION: $FSVERSION"
 
 # Determine LucidLink binary path and instance ID based on version
 if [ "$FSVERSION" = "3" ]; then
@@ -127,29 +142,39 @@ sleep 5
 # Optimize LucidLink cache settings
 echo "Configuring LucidLink cache settings..."
 
-# Calculate cache size based on available space in /data
-if mountpoint -q /data; then
-    # Get available space in /data and use 80% for cache
+# Ensure /data mount is available first
+if ! mountpoint -q /data; then
+    echo "ERROR: /data is not mounted - cannot configure optimal cache settings"
+    echo "Using default cache settings on root filesystem"
+else
+    echo "/data mount verified, configuring optimal cache settings..."
+    
+    # Set cache location to /data first
+    echo "Setting DataCache.Location to /data..."
+    if ! $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Location /data; then
+        echo "Warning: Failed to set DataCache.Location to /data"
+    fi
+    
+    # Calculate cache size based on available space in /data (use 80%)
     AVAILABLE_KB=$(df /data | tail -1 | awk '{print $4}')
     CACHE_SIZE_KB=$((AVAILABLE_KB * 80 / 100))
     CACHE_SIZE_GB=$((CACHE_SIZE_KB / 1024 / 1024))
     
-    # Ensure minimum 10GB and maximum 400GB
+    # Ensure minimum 10GB and maximum 600GB for c6id.4xlarge
     if [ $CACHE_SIZE_GB -lt 10 ]; then
         CACHE_SIZE_GB=10
-    elif [ $CACHE_SIZE_GB -gt 400 ]; then
-        CACHE_SIZE_GB=400
+    elif [ $CACHE_SIZE_GB -gt 600 ]; then
+        CACHE_SIZE_GB=600
     fi
     
-    echo "Setting DataCache.Size to ${CACHE_SIZE_GB}GiB (80% of available /data space)..."
+    echo "Setting DataCache.Size to ${CACHE_SIZE_GB}GiB (80% of available /data space: ${AVAILABLE_KB}KB)..."
+    echo "Running: $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Size ${CACHE_SIZE_GB}GiB"
     if ! $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Size ${CACHE_SIZE_GB}GiB; then
-        echo "Warning: Failed to set DataCache.Size to ${CACHE_SIZE_GB}GiB"
-    fi
-else
-    # Fallback to fixed size if /data not mounted
-    echo "Setting DataCache.Size to 25GiB (fallback)..."
-    if ! $LUCID_BIN --instance $INSTANCE_ID config --set --DataCache.Size 25GiB; then
-        echo "Warning: Failed to set DataCache.Size"
+        echo "ERROR: Failed to set DataCache.Size to ${CACHE_SIZE_GB}GiB"
+        echo "Checking LucidLink status:"
+        $LUCID_BIN --instance $INSTANCE_ID status || echo "Status command failed"
+    else
+        echo "Successfully configured cache size to ${CACHE_SIZE_GB}GiB"
     fi
 fi
 
